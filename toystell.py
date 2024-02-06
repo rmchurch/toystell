@@ -76,10 +76,20 @@ class ToyStellarator():
 
     def __init__(self, R0=12.0, a=2.8, B_t=5.0, iota_two_thirds=0.2, f_ren=1.0, 
                        T0 = 15.0, n0=0.8, alphaT = 2.0, alphan=2.0, Z_eff=2.0):
-        spatial_params = {"R0": R0, "a":a, "B_t": B_t, "ι_2/3": iota_two_thirds, "f_ren": f_ren}
-        profile_params = {"n0": n0, "αn": alphan, "αT": alphaT, "T0": T0, "Z_eff": Z_eff}
-        params = {'spatial': spatial_params, 'profile': profile_params}
-        self.fparams = self.make_fparams(params)
+        #spatial
+        self.R0 = R0
+        self.a = a
+        self.B_t = B_t
+        self.iota_two_thirds = iota_two_thirds
+        self.f_ren = f_ren
+        #profile
+        self.T0 = T0
+        self.n0 = n0
+        self.alphaT = alphaT
+        self.alphan = alphan
+        self.Z_eff = Z_eff
+
+        self.to_tuple()
 
         self.paux_dT = jit(jax.grad(ToyStellarator.stationary_auxpower, argnums=1))
 
@@ -88,6 +98,13 @@ class ToyStellarator():
 
     # These functions translate back and forth between dictionary representations of the machine's "spatial" configuration and the plasma "profile" state, and tuple configurations. 
     # The dictionaries are easier to read and interact with, but for technical reasons, it's easier to use tuples with `jax`.
+
+    def to_tuple(self):
+        """IMPORTANT: Sets structure of tuple from class members
+        This should be the only place needed to change structure"""
+        sp = self.R0, self.a, self.B_t, self.iota_two_thirds, self.f_ren
+        pr = self.T0, self.n0, self.alphaT, self.alphan, self.Z_eff
+        self.fparams = sp, pr
 
     def make_params(self,fparams):
         sp, pr = fparams
@@ -102,39 +119,11 @@ class ToyStellarator():
         pr = p["T0"], p["n0"], p["αT"], p["αn"], p["Z_eff"]
         return sp, pr
 
-    # These functions modify the profile and spatial configuration, respectively, of a design point.
-    # The second always sets the aspect ratio to 7.
-    def set_T0n0(self, T0, n0, fparams):
-        sp, pr = fparams
-        new_pr = T0, n0, pr[2], pr[3], pr[4]
-        return sp, new_pr
-
-    def set_R0ABt(self, R0, A, B_t, fparams):
-        sp, pr = fparams
-        new_sp = R0, R0/A, B_t, sp[3], sp[4]
-        return new_sp, pr
-
-    def set_zeff(self, z_eff, fparams):
-        sp, pr = fparams
-        new_pr = pr[0], pr[1], pr[2], pr[3], z_eff
-        return sp, new_pr
-
-    def set_fren(self, f_ren, fparams):
-        sp, pr = fparams
-        new_sp = sp[0], sp[1], sp[2], sp[3], f_ren
-        return new_sp, pr
-
-    def set_iota(self, iota, fparams):
-        sp, pr = fparams
-        new_sp = sp[0], sp[1], sp[2], iota, sp[4]
-        return new_sp, pr
-
 
 
     @staticmethod
     def plasma_moments(fparams):
         #def plasma_moments(spatial_params, n0, T0, αn, αT):
-        #if fparams is None: fparams = self.fparams
         spatial, profile = fparams
         major_radius, minor_radius, B_t, _, _ = spatial
         central_temperature, central_density, temperature_profile_exponent, density_profile_exponent, z_eff = profile
@@ -190,8 +179,7 @@ class ToyStellarator():
     # Strictly speaking, it's not yet needed to compute all the power plant metrics, but from an organizational perspective it's easy to do that here.
     @staticmethod
     @jit
-    def compute_plasma_point(fparams=None, p_aux=0):
-        #if fparams is None: fparams = self.fparams
+    def compute_plasma_point(fparams, p_aux=0):
         spatial, profile = fparams
         R0, a, B_t, iota_two_thirds, f_ren = spatial
                 
@@ -283,13 +271,12 @@ class ToyStellarator():
         return fpi.run(y_init, spatial, T0, n0, αT, αn, z_eff).params[0]
     
     @staticmethod
-    @jit #TODO: This JUT causes TypeError: Cannot interpret value of type ToyStellataor
+    @jit
     def stationary_plasma_point(fparams):
         """Find the plasma state with the auxilliary power required s.t. dW/dt = 0
         
         Takes about 50us
         """
-        #if not fparams: fparams = self.fparams
         spatial, profile = fparams
         p_aux_stationary = ToyStellarator.stationary_auxpower(spatial, *profile)
         plasma_point = ToyStellarator.compute_plasma_point(fparams, p_aux_stationary)
@@ -298,7 +285,7 @@ class ToyStellarator():
     # # Find plasma, machine stationary state for a given (n0, T0)
 
     # This function returns the plasma and machine state for a given "spatial" configuration and a given "profile" configuration, at the required $P_\text{aux}$.
-    def plasma_at_T0n0(self, T0, n0, fparams):
+    def plasma_at_T0n0(self, T0=None, n0=None):
         """Stationary plasma at this point
         
         Parameters
@@ -317,12 +304,15 @@ class ToyStellarator():
         Takes about 45us
         """    
         outputs = {}
-            
-        fparams = self.set_T0n0(T0, n0, fparams)
+
+        if T0 is not None: self.T0 = T0
+        if n0 is not None: self.n0 = n0
         
-        plasma_point = ToyStellarator.stationary_plasma_point(fparams)
+        self.to_tuple() #call to form self.fparams
+
+        plasma_point = ToyStellarator.stationary_plasma_point(self.fparams)
         
-        spatial, profile = fparams
+        spatial, profile = self.fparams
         dpaux_dt = self.paux_dT(spatial, *profile)
         outputs["dauxilliary_power/dT0 / (MW/keV)"] = dpaux_dt
         
@@ -346,7 +336,7 @@ class ToyStellarator():
         return outputs
     
     def plot_Bscan(self, b_fields=np.linspace(1.5,6.0)):
-        plasmas = [self.plasma_at_T0n0(5.0, 1.0, self.set_R0ABt(6.0, 5.5, bb, self.fparams)) for bb in b_fields]
+        plasmas = [self.plasma_at_T0n0(setattr(self,'B_t',bb)) for bb in b_fields]
         plot_1dscan(b_fields, plasmas)
 
 
@@ -355,7 +345,7 @@ class ToyStellarator():
         for iin,n in enumerate(n_scan):
             row = []
             for iit,T in enumerate(T_scan):
-                row.append(self.plasma_at_T0n0(T, n, self.fparams))
+                row.append(self.plasma_at_T0n0(T0=T, n0=n))
             plasmas.append(row)
         plot_2dscan(T_scan, n_scan, plasmas, self.fparams)
 
